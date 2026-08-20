@@ -54,11 +54,12 @@ jobs:
 
           send_alert() {
             local prefix="$1"
-            local msg="${prefix}🔴 ASTRAEDUS BOX HEARTBEAT MISSING
-No ping for ~${age_h}h (last alive: ${hb_human}).
-The autonomy engine (daily needle + crons) may be DOWN or the box suspended.
-On-box alerts are void when the box is dark — this off-box switch is the only signal.
-Check: laptop power / tmux session / run \`claude /login\` if the OAuth token expired."
+            local msg
+            msg="${prefix}🔴 ASTRAEDUS BOX HEARTBEAT MISSING"$'\n'
+            msg+="No ping for ~${age_h}h (last alive: ${hb_human})."$'\n'
+            msg+="The autonomy engine (daily needle + crons) may be DOWN or the box suspended."$'\n'
+            msg+="On-box alerts are void when the box is dark — this off-box switch is the only signal."$'\n'
+            msg+="Check: laptop power / tmux session / run \`claude /login\` if the OAuth token expired."
             if [ "${DRY_RUN:-false}" = "true" ]; then
               echo "[DRY_RUN] would send Telegram alert:"; printf '%s\n' "${msg}"; return 0
             fi
