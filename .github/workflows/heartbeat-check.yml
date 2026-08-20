@@ -1,0 +1,98 @@
+name: box-heartbeat-check
+
+# Off-box dead-man's-switch for the Astraedus autonomy engine.
+# The laptop pushes `heartbeat.txt` (epoch seconds) hourly via ~/bin/astra-heartbeat.sh.
+# This job runs on GitHub's infra (NOT our box), so it still fires when the box is
+# down/suspended — exactly the blind spot that let the box sit dark ~8 days (2026-08-11..19)
+# with every on-box "Telegram on failure" alert void. See LESSONS.md 2026-08-19.
+
+on:
+  schedule:
+    - cron: '17 * * * *'   # hourly at :17
+  workflow_dispatch:
+    inputs:
+      drill:
+        description: 'Send a clearly-marked TEST alert to prove the Telegram leg works'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Run the full stale-detection logic but log instead of sending'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: heartbeat-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check heartbeat, alert Telegram if stale
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRILL: ${{ github.event.inputs.drill }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          STALE_THRESHOLD=$((3*3600))   # box considered dark after 3h of silence
+          ALERT_THROTTLE=$((6*3600))    # min gap between repeat alerts during an outage
+          now=$(date +%s)
+          hb=$(tr -dc '0-9' < heartbeat.txt 2>/dev/null); hb=${hb:-0}
+          age=$(( now - hb ))
+          age_h=$(( age / 3600 ))
+          last_alert=0
+          [ -f state/last_alert ] && last_alert=$(tr -dc '0-9' < state/last_alert)
+          last_alert=${last_alert:-0}
+          since_alert=$(( now - last_alert ))
+          hb_human=$(date -u -d "@${hb}" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo unknown)
+
+          send_alert() {
+            local prefix="$1"
+            local msg="${prefix}🔴 ASTRAEDUS BOX HEARTBEAT MISSING
+No ping for ~${age_h}h (last alive: ${hb_human}).
+The autonomy engine (daily needle + crons) may be DOWN or the box suspended.
+On-box alerts are void when the box is dark — this off-box switch is the only signal.
+Check: laptop power / tmux session / run \`claude /login\` if the OAuth token expired."
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "[DRY_RUN] would send Telegram alert:"; printf '%s\n' "${msg}"; return 0
+            fi
+            curl -sS --max-time 20 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT}" \
+              --data-urlencode "text=${msg}" >/dev/null && echo "telegram: sent"
+          }
+
+          echo "now=${now} hb=${hb} (${hb_human}) age=${age}s (${age_h}h) threshold=${STALE_THRESHOLD}s since_last_alert=${since_alert}s"
+
+          # DRILL: prove the send leg end-to-end with a clearly-marked test message.
+          if [ "${DRILL:-false}" = "true" ]; then
+            echo "DRILL run — sending marked test alert"
+            send_alert "[DRILL — dead-man's-switch test, safe to ignore] "
+            exit 0
+          fi
+
+          if [ "${age}" -gt "${STALE_THRESHOLD}" ]; then
+            echo "HEARTBEAT STALE"
+            if [ "${since_alert}" -gt "${ALERT_THROTTLE}" ] || [ "${DRY_RUN:-false}" = "true" ]; then
+              send_alert ""
+              if [ "${DRY_RUN:-false}" != "true" ]; then
+                mkdir -p state
+                echo "${now}" > state/last_alert
+                git config user.name "astra-heartbeat-bot"
+                git config user.email "bot@astraedus.dev"
+                git add state/last_alert
+                git commit -q -m "heartbeat: alert sent at ${now}" || true
+                git push -q || true
+                echo "throttle marker committed"
+              fi
+            else
+              echo "stale but within throttle window (${since_alert}s < ${ALERT_THROTTLE}s); no repeat alert"
+            fi
+          else
+            echo "heartbeat fresh; OK"
+          fi
