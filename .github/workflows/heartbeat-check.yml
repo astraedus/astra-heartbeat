@@ -59,7 +59,8 @@ jobs:
             msg+="No ping for ~${age_h}h (last alive: ${hb_human})."$'\n'
             msg+="The autonomy engine (daily needle + crons) may be DOWN or the box suspended."$'\n'
             msg+="On-box alerts are void when the box is dark — this off-box switch is the only signal."$'\n'
-            msg+="Check: laptop power / tmux session / run \`claude /login\` if the OAuth token expired."
+            msg+="Check: laptop power / tmux session / run \`claude /login\` if the OAuth token expired."$'\n'
+            msg+="Likely fix: log in at the laptop. The WiFi profile drops when the last login session ends (permanent fix: sudo bash ~/bin/astra-root-fixes.sh)."
             if [ "${DRY_RUN:-false}" = "true" ]; then
               echo "[DRY_RUN] would send Telegram alert:"; printf '%s\n' "${msg}"; return 0
             fi
